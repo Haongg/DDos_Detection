@@ -1,0 +1,124 @@
+services:
+  # =========================================
+  # 1. KAFKA SERVICE (ĐÃ KHÔI PHỤC)
+  # =========================================
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_HEAP_OPTS: "-Xmx400M -Xms200M"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ddos_net
+    restart: unless-stopped
+
+  # =========================================
+  # 2. SPARK APP
+  # =========================================
+  spark-app:
+    build:
+      context: ./src/spark-app
+    container_name: spark-app
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./src/spark-app:/app
+      - ./src/spark-app/config:/app/config
+      - ./data/processed:/data/processed
+      - ./data/checkpoints:/data/checkpoints
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      - INPUT_TOPIC=network-traffic
+      - OUTPUT_TOPIC=ddos-alerts
+      - SPARK_CHECKPOINT_DIR=/data/checkpoints/spark-job-1
+
+    command: >
+      /opt/spark/bin/spark-submit 
+      --master "local[*]" 
+      --driver-memory 1500M 
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 
+      main.py
+    networks:
+      - ddos_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep org.apache.spark.deploy.SparkSubmit || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # =========================================
+  # 3. PRODUCER
+  # =========================================
+  producer:
+    build:
+      context: ./src/producer
+    container_name: traffic-generator
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-network-traffic}
+    networks:
+      - ddos_net
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # =========================================
+  # 4. ALERT SERVICE
+  # =========================================
+  alert-service:
+    build:
+      context: ./src/alerts
+    container_name: alert-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      - KAFKA_TOPIC=ddos-alerts
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    networks:
+      - ddos_net
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  ddos_net:
+    driver: bridge
+
+volumes:
+  kafka_data:
