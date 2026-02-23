@@ -1,0 +1,5 @@
+confluent-kafka
+faker
+numpy
+python-dotenv
+PyYAML
