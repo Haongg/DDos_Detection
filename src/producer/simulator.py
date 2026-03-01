@@ -3,33 +3,13 @@ import os
 import random
 import time
 import math
+import threading
 import concurrent.futures
 from urllib.parse import urlencode
 
 import numpy as np
 from confluent_kafka import Producer
-from confluent_kafka.admin import AdminClient, NewTopic
 from faker import Faker
-
-def kafka_topics(producer_conf):
-    admin_client = AdminClient({'bootstrap.servers': producer_conf['bootstrap.servers']})
-    target_topic = os.getenv('KAFKA_TOPIC', 'network-traffic')
-
-    metadata = admin_client.list_topics(timeout=5)
-    if target_topic not in metadata.topics:
-        print(f"Topic '{target_topic}' not exist. Creating...")
-
-        new_topic = NewTopic(target_topic, num_partitions=3, replication_factor=1)
-        fs = admin_client.create_topics([new_topic])
-
-        for topic, f in fs.items():
-            try:
-                f.result()
-                print(f"✅ Successful: {topic}")
-            except Exception as e:
-                print(f"❌ Errors: {e}")
-    else:
-        print(f"Topic '{target_topic}' already created.")
 
 class TrafficResources:
     def __init__(self):
@@ -45,7 +25,7 @@ class TrafficResources:
 
         self.flood_ip = [self.fake.ipv4() for _ in range(100)]
         self.botnet_ips = [self.fake.ipv4() for _ in range(500)]
-        self.heavy_endpoints = ["/api/v1/search", "/api/v1/report/export", "/api/v1/login"]
+        self.heavy_endpoints = ["/api/v1/search", "/api/v1/report/export", "/api/v1/login", "/search"]
         self.scan_endpoints = ["/.env", "/wp-admin", "/admin/config.php", "/etc/passwd"]
 
         self.method = ["GET", "POST", "PUT", "DELETE"]
@@ -148,54 +128,141 @@ class TrafficFactory(TrafficResources):
     # --- VOLUME ---
     def method_flood(self):
         """DDos Flood"""
+        duration_sec = random.randint(5, 10)
         ip = random.choice(self.flood_ip)
-        for _ in range(100):
-            packet = self._base_packet(
-                ip,
-                random.choice(self.user_agents),
-                self._build_url("/api/v1/login", {"username": self.fake.user_name(), "nonce": self.fake.uuid4()[:8]}),
-                random.choice([200, 201]),
-                random.choice(self.method)
-            )
-            self.send(packet)
+        for _ in range(duration_sec):
+            second_start = time.time()
+            for _ in range(random.randint(400, 700)):
+                packet = self._base_packet(
+                    ip,
+                    random.choice(self.user_agents),
+                    self._build_url("/api/v1/login", {"username": self.fake.user_name(), "nonce": self.fake.uuid4()[:8]}),
+                    random.choice([200, 201]),
+                    random.choice(self.method)
+                )
+                self.send(packet)
+            elapsed = time.time() - second_start
+            if elapsed < 1:
+                time.sleep(1 - elapsed)
 
     def method_botnet(self):
         """Botnet"""
-        for ip in random.sample(self.botnet_ips, 50):
-            method = random.choice(self.method)
-            packet = self._base_packet(
-                ip,
-                random.choice(self.user_agents),
-                self._random_normal_url(method),
-                random.choice([200, 201]),
-                method
-            )
-            self.send(packet)
+        duration_sec = random.randint(5, 10)
+        
+        for _ in range(duration_sec):
+            second_start = time.time()
+            
+            selected_ips = random.sample(self.botnet_ips, 20)
+            batch_tasks = []
+            for ip in selected_ips:
+                req_count = random.randint(10, 20)
+                batch_tasks.extend([ip] * req_count)
+                
+            random.shuffle(batch_tasks)
+            
+            for ip in batch_tasks:
+                packet = self._base_packet(
+                    ip=ip,
+                    ua=random.choice(self.user_agents),
+                    url=self._random_normal_url("GET"),
+                    stt_code=200,
+                    method=random.choice(["GET", "POST"])
+                )
+                self.send(packet)
+                
+            elapsed = time.time() - second_start
+            if elapsed < 1:
+                time.sleep(1 - elapsed)
 
     # --- BEHAVIOR ---
     def method_search_flood(self):
         """DDos Search Flood"""
-        packet = self._base_packet(
-            self.fake.ipv4(),
-            random.choice(self.user_agents),
-            self._random_heavy_url(),
-            random.choice(self.status_code),
-            random.choice(self.method)
-        )
-        packet['payload_size'] = random.randint(1024, 2048)
-        self.send(packet)
+        attacker_ips = random.sample(self.botnet_ips, random.randint(20, 80))
+        target_rps = random.randint(250, 600)
+        duration_sec = random.randint(4, 8)
+
+        for _ in range(duration_sec):
+            second_start = time.time()
+            for _ in range(target_rps):
+                packet = self._base_packet(
+                    random.choice(attacker_ips),
+                    random.choice(self.user_agents),
+                    self._random_heavy_url(),
+                    random.choices(
+                        [200, 429, 500, 502, 503, 504],
+                        weights=[0.10, 0.18, 0.17, 0.18, 0.22, 0.15],
+                        k=1
+                    )[0],
+                    random.choice(["GET", "POST"])
+                )
+                packet['payload_size'] = random.randint(1536, 4096)
+                self.send(packet)
+
+            elapsed = time.time() - second_start
+            if elapsed < 1:
+                time.sleep(1 - elapsed)
 
     def method_scanning(self):
         """DDos Scanning"""
-        packet = self._base_packet(self.fake.ipv4(), "Nmap-Scanner/7.9", random.choice(self.scan_endpoints), 404, "GET")
-        self.send(packet)
+        scanner_ips = random.sample(self.botnet_ips, random.randint(10, 40))
+        target_rps = random.randint(150, 450)
+        duration_sec = random.randint(5, 12)
+        scanner_agents = [
+            "Nmap-Scanner/7.9",
+            "masscan/1.3",
+            "sqlmap/1.8"
+        ]
+
+        for _ in range(duration_sec):
+            second_start = time.time()
+            for _ in range(target_rps):
+                packet = self._base_packet(
+                    random.choice(scanner_ips),
+                    random.choice(scanner_agents),
+                    random.choice(self.scan_endpoints),
+                    random.choices(
+                        [200, 401, 403, 404, 429, 503],
+                        weights=[0.03, 0.12, 0.20, 0.50, 0.10, 0.05],
+                        k=1
+                    )[0],
+                    "GET"
+                )
+                packet['payload_size'] = random.randint(64, 512)
+                self.send(packet)
+
+            elapsed = time.time() - second_start
+            if elapsed < 1:
+                time.sleep(1 - elapsed)
 
     # --- VULNERABILITY ---
     def method_slowloris(self):
         """Slowloris Attack"""
-        packet = self._base_packet(self.fake.ipv4(), "Slowloris-Lib/1.1", "/index.html", 408, "GET")
-        packet['payload_size'] = random.randint(1, 10)
-        self.send(packet)
+        attacker_ips = random.sample(self.botnet_ips, random.randint(30, 90))
+        target_paths = ["/", "/index.html", "/api/v1/login", "/api/v1/search"]
+        duration_sec = random.randint(30, 90)
+
+        for _ in range(duration_sec):
+            second_start = time.time()
+            for ip in attacker_ips:
+                for _ in range(random.randint(1, 3)):
+                    packet = self._base_packet(
+                        ip,
+                        "Slowloris-Lib/1.1",
+                        random.choice(target_paths),
+                        random.choices(
+                            [200, 400, 408, 429, 503, 504],
+                            weights=[0.03, 0.15, 0.42, 0.12, 0.16, 0.12],
+                            k=1
+                        )[0],
+                        "GET"
+                    )
+                    packet['payload_size'] = random.randint(1, 16)
+                    packet['response_size'] = random.randint(0, 128)
+                    self.send(packet)
+
+            elapsed = time.time() - second_start
+            if elapsed < 1:
+                time.sleep(1 - elapsed)
 
     # --- NORMAL GENERATOR ---
     def gen_normal(self, count):
@@ -270,7 +337,6 @@ def main():
         'linger.ms': 100
     }
 
-    kafka_topics(conf)
 
     p = Producer(conf)
     factory = TrafficFactory(p, os.getenv('KAFKA_TOPIC', 'network-traffic'))
