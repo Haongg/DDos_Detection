@@ -15,6 +15,7 @@ def consume_from_kafka(spark):
     .option("kafka.bootstrap.servers", SparkConfig.KAFKA_BOOTSTRAP_SERVERS) \
     .option("subscribe", SparkConfig.INPUT_TOPIC) \
     .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", SparkConfig.SETTINGS["spark.sql.streaming.failOnDataLoss"]) \
     .option("maxOffsetsPerTrigger", SparkConfig.SETTINGS["spark.sql.streaming.maxOffsetsPerTrigger"]) \
     .load()
 
@@ -32,7 +33,7 @@ def main():
     .config("spark.sql.streaming.stateStore.maintenanceInterval", SparkConfig.SETTINGS["spark.sql.streaming.stateStore.maintenanceInterval"]) \
     .config("spark.sql.streaming.multipleWatermarkPolicy", SparkConfig.SETTINGS["spark.sql.streaming.multipleWatermarkPolicy"]) \
     .config("spark.sql.streaming.minBatchesToRetain", SparkConfig.SETTINGS["spark.sql.streaming.minBatchesToRetain"]) \
-    .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "true") \
+    .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", SparkConfig.SETTINGS["spark.sql.streaming.statefulOperator.checkCorrectness.enabled"]) \
     .getOrCreate()
 
   raw_df = consume_from_kafka(spark) \
@@ -56,10 +57,9 @@ def main():
     .outputMode("update") \
     .format("kafka") \
     .option("kafka.bootstrap.servers", SparkConfig.KAFKA_BOOTSTRAP_SERVERS) \
-    .option("failOnDataLoss","false") \
     .option("topic", SparkConfig.OUTPUT_TOPIC) \
     .option("checkpointLocation",SparkConfig.SETTINGS["spark.sql.streaming.checkpointLocation"]) \
-    .trigger(processingTime="2 seconds") \
+    .trigger(processingTime=SparkConfig.SETTINGS["spark.sql.streaming.trigger.processingTime"]) \
     .start()
 
   query.awaitTermination()

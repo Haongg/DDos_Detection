@@ -155,7 +155,7 @@ class TrafficFactory(TrafficResources):
             selected_ips = random.sample(self.botnet_ips, 20)
             batch_tasks = []
             for ip in selected_ips:
-                req_count = random.randint(10, 20)
+                req_count = random.randint(20, 40)
                 batch_tasks.extend([ip] * req_count)
                 
             random.shuffle(batch_tasks)
@@ -205,7 +205,7 @@ class TrafficFactory(TrafficResources):
     def method_scanning(self):
         """DDos Scanning"""
         scanner_ips = random.sample(self.botnet_ips, random.randint(10, 40))
-        target_rps = random.randint(150, 450)
+        target_rps = random.randint(200, 500)
         duration_sec = random.randint(5, 12)
         scanner_agents = [
             "Nmap-Scanner/7.9",

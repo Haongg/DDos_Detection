@@ -1,10 +1,11 @@
+import os
 from functools import reduce
 
 from pyspark.sql.functions import (
+  approx_count_distinct,
   col,
   concat,
   count,
-  approx_count_distinct,
   current_timestamp,
   lit,
   sum as spark_sum,
@@ -12,7 +13,7 @@ from pyspark.sql.functions import (
   window,
 )
 
-WATERMARK_DELAY = "2 minutes"
+WATERMARK_DELAY = os.getenv("SPARK_WATERMARK_DELAY", "2 minutes")
 
 MAIN_WINDOW_RULES = [
   {"seconds": 5, "slide": 1, "severity": "critical", "rank": 2},
@@ -47,157 +48,195 @@ def _union_all(dfs):
   return reduce(lambda left, right: left.unionByName(right), dfs)
 
 
-def _build_window_alerts(
-  df,
-  attack_type,
-  signal_reason,
+def _safe_ratio(numerator_col, denominator_col):
+  return when(denominator_col > 0, numerator_col / denominator_col).otherwise(lit(0.0))
+
+
+def _aggregate_src_ip_window(df, window_seconds, slide_seconds):
+  scan_only = col("url_type").isin("scan_url")
+  non_scan = ~scan_only
+  non_scan_non_search = ~col("url_type").isin("scan_url", "search_url")
+  search_focus = col("url_type").isin("search_url", "api_report_export_url", "api_login_url")
+
+  return df.groupBy(
+    window(col("timestamp"), f"{window_seconds} seconds", f"{slide_seconds} seconds"),
+    col("src_ip"),
+  ).agg(
+    count("*").alias("request_count_all"),
+    spark_sum(when(non_scan, 1).otherwise(0)).alias("request_count_non_scan"),
+    spark_sum(when(non_scan_non_search, 1).otherwise(0)).alias("request_count_non_scan_non_search"),
+    spark_sum(when(search_focus, 1).otherwise(0)).alias("request_count_search_focus"),
+    spark_sum(when(scan_only, 1).otherwise(0)).alias("request_count_scan_only"),
+    approx_count_distinct("request_path").alias("unique_path_count_all"),
+    approx_count_distinct(when(non_scan, col("request_path"))).alias("unique_path_count_non_scan"),
+    approx_count_distinct(when(non_scan_non_search, col("request_path"))).alias("unique_path_count_non_scan_non_search"),
+    approx_count_distinct(when(search_focus, col("request_path"))).alias("unique_path_count_search_focus"),
+    approx_count_distinct(when(scan_only, col("request_path"))).alias("unique_path_count_scan_only"),
+    approx_count_distinct("method").alias("method_variety"),
+    spark_sum(when(col("status_category").isin("4xx", "5xx"), 1).otherwise(0)).alias("error_count_all"),
+    spark_sum(when(non_scan & col("status_category").isin("4xx", "5xx"), 1).otherwise(0)).alias("error_count_non_scan"),
+    spark_sum(
+      when(non_scan_non_search & col("status_category").isin("4xx", "5xx"), 1).otherwise(0),
+    ).alias("error_count_non_scan_non_search"),
+    spark_sum(when(search_focus & col("status_category").isin("4xx", "5xx"), 1).otherwise(0)).alias("error_count_search_focus"),
+    spark_sum(when(scan_only & col("status_category").isin("4xx", "5xx"), 1).otherwise(0)).alias("error_count_scan_only"),
+    spark_sum(when(col("status_code").isin(408, 429, 503, 504), 1).otherwise(0)).alias("timeout_like_count_all"),
+    spark_sum(when(col("response_size") <= 128, 1).otherwise(0)).alias("tiny_response_count_all"),
+  )
+
+
+def _build_alerts_from_aggregate(
+  aggregated_df,
+  request_count_col,
+  unique_path_count_col,
+  error_count_col,
   threshold,
-  window_rules,
-  base_filter=None,
+  window_seconds,
+  attack_type,
+  severity,
+  severity_rank,
+  signal_reason,
   post_filter=None,
 ):
-  if base_filter is None:
-    base_filter = lit(True)
-
-  alerts = []
-  source = df.filter(base_filter)
-
-  for rule in window_rules:
-    window_seconds = rule["seconds"]
-
-    aggregated = source.groupBy(
-      window(col("timestamp"), f"{window_seconds} seconds", f"{rule['slide']} seconds"),
-      col("src_ip"),
-    ).agg(
-      count("*").alias("request_count"),
-      approx_count_distinct("request_path").alias("unique_path_count"),
-      approx_count_distinct("method").alias("method_variety"),
-      spark_sum(when(col("status_category").isin("4xx", "5xx"), 1).otherwise(0)).alias("error_count"),
-      spark_sum(when(col("status_code").isin(408, 429, 503, 504), 1).otherwise(0)).alias("timeout_like_count"),
-      spark_sum(when(col("response_size") <= 128, 1).otherwise(0)).alias("tiny_response_count"),
+  alerts = aggregated_df \
+    .withColumn("request_count", col(request_count_col)) \
+    .withColumn("unique_path_count", col(unique_path_count_col)) \
+    .withColumn("rps", col(request_count_col) / lit(float(window_seconds))) \
+    .withColumn(
+      "error_ratio",
+      _safe_ratio(col(error_count_col), col(request_count_col)),
     ) \
-      .withColumn("rps", col("request_count") / lit(float(window_seconds))) \
-      .withColumn(
-        "error_ratio",
-        when(col("request_count") > 0, col("error_count") / col("request_count")).otherwise(lit(0.0)),
-      ) \
-      .withColumn(
-        "timeout_like_ratio",
-        when(col("request_count") > 0, col("timeout_like_count") / col("request_count")).otherwise(lit(0.0)),
-      ) \
-      .withColumn(
-        "tiny_response_ratio",
-        when(col("request_count") > 0, col("tiny_response_count") / col("request_count")).otherwise(lit(0.0)),
-      ) \
-      .filter(col("request_count") >= lit(threshold))
+    .filter(col("request_count") >= lit(threshold))
 
-    if post_filter is not None:
-      aggregated = aggregated.filter(post_filter)
+  if post_filter is not None:
+    alerts = alerts.filter(post_filter)
 
-    alerts.append(
-      aggregated.select(
-        col("src_ip"),
-        col("window.start").alias("window_start"),
-        col("window.end").alias("window_end"),
-        lit(f"{window_seconds}s").alias("window_size"),
-        lit(attack_type).alias("attack_type"),
-        lit(rule["severity"]).alias("severity"),
-        lit(rule["rank"]).alias("severity_rank"),
-        col("request_count"),
-        col("rps"),
-        col("unique_path_count"),
-        col("error_ratio"),
-        lit(signal_reason).alias("signal_reason"),
-      ),
-    )
-
-  return _union_all(alerts)
+  return alerts.select(
+    col("src_ip"),
+    col("window.start").alias("window_start"),
+    col("window.end").alias("window_end"),
+    lit(f"{window_seconds}s").alias("window_size"),
+    lit(attack_type).alias("attack_type"),
+    lit(severity).alias("severity"),
+    lit(severity_rank).alias("severity_rank"),
+    col("request_count"),
+    col("rps"),
+    col("unique_path_count"),
+    col("error_ratio"),
+    lit(signal_reason).alias("signal_reason"),
+  )
 
 
-def detect_http_flood(df):
-  common_args = {
-    "df": df,
-    "attack_type": "http_flood",
-    "signal_reason": "high_rps_general_http",
-    "base_filter": ~col("url_type").isin("scan_url"),
-  }
+def _detect_on_5s_aggregate(agg_5s):
+  rule = MAIN_WINDOW_RULES[0]
 
-  main_alerts = _build_window_alerts(
-    **common_args,
+  http_flood = _build_alerts_from_aggregate(
+    aggregated_df=agg_5s,
+    request_count_col="request_count_non_scan",
+    unique_path_count_col="unique_path_count_non_scan",
+    error_count_col="error_count_non_scan",
     threshold=MAIN_THRESHOLDS["http_flood"],
-    window_rules=MAIN_WINDOW_RULES,
+    window_seconds=rule["seconds"],
+    attack_type="http_flood",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="high_rps_general_http",
   )
 
-  fast_alerts = _build_window_alerts(
-    **common_args,
-    threshold=FAST_THRESHOLDS["http_flood"],
-    window_rules=FAST_WINDOW_RULES,
-  )
-
-  return main_alerts.unionByName(fast_alerts)
-
-
-def detect_botnet(df):
-  return _build_window_alerts(
-    df=df,
-    attack_type="botnet",
-    signal_reason="distributed_low_and_steady_rps",
+  botnet = _build_alerts_from_aggregate(
+    aggregated_df=agg_5s,
+    request_count_col="request_count_non_scan_non_search",
+    unique_path_count_col="unique_path_count_non_scan_non_search",
+    error_count_col="error_count_non_scan_non_search",
     threshold=MAIN_THRESHOLDS["botnet"],
-    window_rules=MAIN_WINDOW_RULES,
-    base_filter=~col("url_type").isin("scan_url", "search_url"),
-    post_filter=col("unique_path_count") >= 3,
+    window_seconds=rule["seconds"],
+    attack_type="botnet",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="distributed_low_and_steady_rps",
+    post_filter=col("unique_path_count_non_scan_non_search") >= 3,
   )
 
-
-def detect_search_flood(df):
-  return _build_window_alerts(
-    df=df,
-    attack_type="search_flood",
-    signal_reason="heavy_db_or_login_endpoints",
+  search_flood = _build_alerts_from_aggregate(
+    aggregated_df=agg_5s,
+    request_count_col="request_count_search_focus",
+    unique_path_count_col="unique_path_count_search_focus",
+    error_count_col="error_count_search_focus",
     threshold=MAIN_THRESHOLDS["search_flood"],
-    window_rules=MAIN_WINDOW_RULES,
-    base_filter=col("url_type").isin("search_url", "api_report_export_url", "api_login_url"),
+    window_seconds=rule["seconds"],
+    attack_type="search_flood",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="heavy_db_or_login_endpoints",
   )
 
-
-def detect_scanning(df):
-  common_args = {
-    "df": df,
-    "attack_type": "scanning",
-    "signal_reason": "suspicious_scan_endpoints",
-    "base_filter": col("url_type").isin("scan_url"),
-    "post_filter": col("error_ratio") >= 0.5,
-  }
-
-  main_alerts = _build_window_alerts(
-    **common_args,
+  scanning = _build_alerts_from_aggregate(
+    aggregated_df=agg_5s,
+    request_count_col="request_count_scan_only",
+    unique_path_count_col="unique_path_count_scan_only",
+    error_count_col="error_count_scan_only",
     threshold=MAIN_THRESHOLDS["scanning"],
-    window_rules=MAIN_WINDOW_RULES,
+    window_seconds=rule["seconds"],
+    attack_type="scanning",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="suspicious_scan_endpoints",
+    post_filter=_safe_ratio(col("error_count_scan_only"), col("request_count_scan_only")) >= 0.5,
   )
 
-  fast_alerts = _build_window_alerts(
-    **common_args,
-    threshold=FAST_THRESHOLDS["scanning"],
-    window_rules=FAST_WINDOW_RULES,
-  )
-
-  return main_alerts.unionByName(fast_alerts)
-
-
-def detect_slowloris(df):
-  return _build_window_alerts(
-    df=df,
-    attack_type="slowloris",
-    signal_reason="slow_connection_behavior",
+  slowloris = _build_alerts_from_aggregate(
+    aggregated_df=agg_5s,
+    request_count_col="request_count_all",
+    unique_path_count_col="unique_path_count_all",
+    error_count_col="error_count_all",
     threshold=MAIN_THRESHOLDS["slowloris"],
-    window_rules=MAIN_WINDOW_RULES,
+    window_seconds=rule["seconds"],
+    attack_type="slowloris",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="slow_connection_behavior",
     post_filter=(
-      (col("timeout_like_ratio") >= 0.30)
-      & (col("tiny_response_ratio") >= 0.60)
+      (_safe_ratio(col("timeout_like_count_all"), col("request_count_all")) >= 0.30)
+      & (_safe_ratio(col("tiny_response_count_all"), col("request_count_all")) >= 0.60)
       & (col("method_variety") <= 2)
-      & (col("unique_path_count") <= 3)
+      & (col("unique_path_count_all") <= 3)
     ),
   )
+
+  return [http_flood, botnet, search_flood, scanning, slowloris]
+
+
+def _detect_on_2s_aggregate(agg_2s):
+  rule = FAST_WINDOW_RULES[0]
+
+  http_flood_fast = _build_alerts_from_aggregate(
+    aggregated_df=agg_2s,
+    request_count_col="request_count_non_scan",
+    unique_path_count_col="unique_path_count_non_scan",
+    error_count_col="error_count_non_scan",
+    threshold=FAST_THRESHOLDS["http_flood"],
+    window_seconds=rule["seconds"],
+    attack_type="http_flood",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="high_rps_general_http",
+  )
+
+  scanning_fast = _build_alerts_from_aggregate(
+    aggregated_df=agg_2s,
+    request_count_col="request_count_scan_only",
+    unique_path_count_col="unique_path_count_scan_only",
+    error_count_col="error_count_scan_only",
+    threshold=FAST_THRESHOLDS["scanning"],
+    window_seconds=rule["seconds"],
+    attack_type="scanning",
+    severity=rule["severity"],
+    severity_rank=rule["rank"],
+    signal_reason="suspicious_scan_endpoints",
+    post_filter=_safe_ratio(col("error_count_scan_only"), col("request_count_scan_only")) >= 0.5,
+  )
+
+  return [http_flood_fast, scanning_fast]
 
 
 def detect_distributed_heavy_url(df):
@@ -217,7 +256,7 @@ def detect_distributed_heavy_url(df):
     spark_sum(when(col("status_category").isin("4xx", "5xx"), 1).otherwise(0)).alias("path_error_count"),
   ).withColumn(
     "path_error_ratio",
-    when(col("path_request_count_60s") > 0, col("path_error_count") / col("path_request_count_60s")).otherwise(lit(0.0)),
+    _safe_ratio(col("path_error_count"), col("path_request_count_60s")),
   ).filter(
     (col("path_request_count_60s") >= lit(min_60s_count))
     & (col("unique_src_ip") >= lit(20))
@@ -242,14 +281,22 @@ def detect_distributed_heavy_url(df):
 def ddos_detection_logic(df):
   watermarked_df = df.withWatermark("timestamp", WATERMARK_DELAY)
 
-  detector_outputs = [
-    detect_http_flood(watermarked_df),
-    detect_botnet(watermarked_df),
-    detect_search_flood(watermarked_df),
-    detect_scanning(watermarked_df),
-    detect_slowloris(watermarked_df),
-    detect_distributed_heavy_url(watermarked_df),
-  ]
+  agg_5s = _aggregate_src_ip_window(
+    df=watermarked_df,
+    window_seconds=MAIN_WINDOW_RULES[0]["seconds"],
+    slide_seconds=MAIN_WINDOW_RULES[0]["slide"],
+  )
+  agg_2s = _aggregate_src_ip_window(
+    df=watermarked_df,
+    window_seconds=FAST_WINDOW_RULES[0]["seconds"],
+    slide_seconds=FAST_WINDOW_RULES[0]["slide"],
+  )
+
+  detector_outputs = (
+    _detect_on_5s_aggregate(agg_5s)
+    + _detect_on_2s_aggregate(agg_2s)
+    + [detect_distributed_heavy_url(watermarked_df)]
+  )
 
   merged_alerts = _union_all(detector_outputs)
 
