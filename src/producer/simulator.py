@@ -11,6 +11,20 @@ import numpy as np
 from confluent_kafka import Producer
 from faker import Faker
 
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 class TrafficResources:
     def __init__(self):
         self.fake = Faker()
@@ -51,9 +65,15 @@ class TrafficFactory(TrafficResources):
         super().__init__()
         self.producer = producer
         self.topic = topic
+        self.attack_rate_multiplier = max(0.1, _env_float("SIMULATOR_ATTACK_RATE_MULTIPLIER", 1.0))
+        self.botnet_selected_ips = max(1, min(len(self.botnet_ips), _env_int("SIMULATOR_BOTNET_SELECTED_IPS", 20)))
 
     def send(self, data):
         self.producer.produce(self.topic, key=data['src_ip'], value=json.dumps(data))
+
+    def _scaled_randint(self, low, high):
+        base = random.randint(low, high)
+        return max(1, int(round(base * self.attack_rate_multiplier)))
 
     def _build_url(self, path, params=None):
         if not params:
@@ -132,7 +152,7 @@ class TrafficFactory(TrafficResources):
         ip = random.choice(self.flood_ip)
         for _ in range(duration_sec):
             second_start = time.time()
-            for _ in range(random.randint(400, 700)):
+            for _ in range(self._scaled_randint(400, 700)):
                 packet = self._base_packet(
                     ip,
                     random.choice(self.user_agents),
@@ -152,10 +172,10 @@ class TrafficFactory(TrafficResources):
         for _ in range(duration_sec):
             second_start = time.time()
             
-            selected_ips = random.sample(self.botnet_ips, 20)
+            selected_ips = random.sample(self.botnet_ips, self.botnet_selected_ips)
             batch_tasks = []
             for ip in selected_ips:
-                req_count = random.randint(20, 40)
+                req_count = self._scaled_randint(20, 40)
                 batch_tasks.extend([ip] * req_count)
                 
             random.shuffle(batch_tasks)
@@ -178,7 +198,7 @@ class TrafficFactory(TrafficResources):
     def method_search_flood(self):
         """DDos Search Flood"""
         attacker_ips = random.sample(self.botnet_ips, random.randint(20, 80))
-        target_rps = random.randint(250, 600)
+        target_rps = self._scaled_randint(250, 600)
         duration_sec = random.randint(4, 8)
 
         for _ in range(duration_sec):
@@ -205,7 +225,7 @@ class TrafficFactory(TrafficResources):
     def method_scanning(self):
         """DDos Scanning"""
         scanner_ips = random.sample(self.botnet_ips, random.randint(10, 40))
-        target_rps = random.randint(200, 500)
+        target_rps = self._scaled_randint(200, 500)
         duration_sec = random.randint(5, 12)
         scanner_agents = [
             "Nmap-Scanner/7.9",
@@ -244,7 +264,7 @@ class TrafficFactory(TrafficResources):
         for _ in range(duration_sec):
             second_start = time.time()
             for ip in attacker_ips:
-                for _ in range(random.randint(1, 3)):
+                for _ in range(self._scaled_randint(1, 3)):
                     packet = self._base_packet(
                         ip,
                         "Slowloris-Lib/1.1",
@@ -282,13 +302,19 @@ class TrafficOrchestrator:
         self.factory = factory
         self.controller = controller
         self.stop_signal = False
+        self.normal_batch_factor = max(0.01, _env_float("SIMULATOR_NORMAL_BATCH_FACTOR", 0.1))
+        self.attack_interval_min_seconds = max(1, _env_int("SIMULATOR_ATTACK_INTERVAL_MIN_SECONDS", 10))
+        self.attack_interval_max_seconds = max(
+            self.attack_interval_min_seconds,
+            _env_int("SIMULATOR_ATTACK_INTERVAL_MAX_SECONDS", 20),
+        )
 
     def run_normal_stream(self):
         """Luồng 1: Giả lập người dùng thật chạy liên tục với Dynamic RPS"""
         print("🟢 [Thread-Normal] Started.")
         while not self.stop_signal:
             current_rps = self.controller.get_current_rps()
-            batch_size = max(1, int(current_rps * 0.1))
+            batch_size = max(1, int(current_rps * self.normal_batch_factor))
             self.factory.gen_normal(batch_size)
             
             self.factory.producer.poll(0)
@@ -299,7 +325,7 @@ class TrafficOrchestrator:
         """Luồng 2: Giả lập các đợt tấn công bùng nổ ngẫu nhiên"""
         print("🔴 [Thread-Attack] Started.")
         while not self.stop_signal:
-            time.sleep(random.randint(10, 20))
+            time.sleep(random.randint(self.attack_interval_min_seconds, self.attack_interval_max_seconds))
             
             if self.stop_signal: break
 
@@ -324,6 +350,7 @@ class TrafficOrchestrator:
 
 def main():
     kafka_server = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092').strip()
+    base_rps = int(os.getenv("SIMULATOR_BASE_RPS", "120"))
     # print(f"DEBUG: Connecting to Kafka at -> {kafka_server}")
 
     conf = {
@@ -339,8 +366,8 @@ def main():
 
 
     p = Producer(conf)
-    factory = TrafficFactory(p, os.getenv('KAFKA_TOPIC', 'network-traffic'))
-    controller = RPSController(base_rps=50)
+    factory = TrafficFactory(p, os.getenv('INPUT_TOPIC', 'network-traffic'))
+    controller = RPSController(base_rps=base_rps)
     orchestrator = TrafficOrchestrator(factory, controller)
 
     print("🚀 Orchestrator started. Multi-threading active...")

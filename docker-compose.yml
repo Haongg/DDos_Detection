@@ -74,11 +74,15 @@ services:
       - INPUT_TOPIC=network-traffic
       - OUTPUT_TOPIC=ddos-alerts
       - SPARK_CHECKPOINT_DIR=/data/checkpoints/spark-job-v2
-      - SHUFFLE_PARTITIONS=4
-      - SPARK_MAX_OFFSETS_PER_TRIGGER=1000
+      - SHUFFLE_PARTITIONS=6
+      - SPARK_MAX_OFFSETS_PER_TRIGGER=3000
       - SPARK_CHECK_CORRECTNESS_ENABLED=false
       - SPARK_FAIL_ON_DATA_LOSS=false
       - SPARK_TRIGGER_INTERVAL=2 seconds
+      - SPARK_WATERMARK_DELAY=45 seconds
+      - SPARK_ENABLE_FAST_WINDOW_RULES=false
+      - SPARK_ENABLE_DISTRIBUTED_HEAVY_URL_RULE=true
+      - SPARK_PROGRESS_LOG_INTERVAL_SECONDS=15
     command: >
       /opt/spark/bin/spark-submit 
       --master "local[*]" 
@@ -108,7 +112,13 @@ services:
         condition: service_completed_successfully
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
-      - KAFKA_TOPIC=${KAFKA_TOPIC:-network-traffic}
+      - INPUT_TOPIC=${INPUT_TOPIC:-network-traffic}
+      - SIMULATOR_BASE_RPS=${SIMULATOR_BASE_RPS:-120}
+      - SIMULATOR_ATTACK_RATE_MULTIPLIER=${SIMULATOR_ATTACK_RATE_MULTIPLIER:-1.0}
+      - SIMULATOR_NORMAL_BATCH_FACTOR=${SIMULATOR_NORMAL_BATCH_FACTOR:-0.1}
+      - SIMULATOR_ATTACK_INTERVAL_MIN_SECONDS=${SIMULATOR_ATTACK_INTERVAL_MIN_SECONDS:-10}
+      - SIMULATOR_ATTACK_INTERVAL_MAX_SECONDS=${SIMULATOR_ATTACK_INTERVAL_MAX_SECONDS:-20}
+      - SIMULATOR_BOTNET_SELECTED_IPS=${SIMULATOR_BOTNET_SELECTED_IPS:-20}
     networks:
       - ddos_net
     healthcheck:
@@ -130,11 +140,19 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
-      - KAFKA_TOPIC=ddos-alerts
+      - OUTPUT_TOPIC=ddos-alerts
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - ALERT_DEDUP_TTL_SECONDS=${ALERT_DEDUP_TTL_SECONDS:-300}
+      - ALERT_MIN_SEVERITY=${ALERT_MIN_SEVERITY:-critical}
+      - ALERT_STATS_INTERVAL_SECONDS=${ALERT_STATS_INTERVAL_SECONDS:-30}
     networks:
       - ddos_net
     healthcheck:
@@ -160,6 +178,17 @@ services:
       retries: 5
     volumes:
       - es_data:/usr/share/elasticsearch/data
+  
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks:
+      - ddos_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
 networks:
   ddos_net:

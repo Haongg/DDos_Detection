@@ -13,7 +13,13 @@ from pyspark.sql.functions import (
   window,
 )
 
-WATERMARK_DELAY = os.getenv("SPARK_WATERMARK_DELAY", "2 minutes")
+def _flag(name, default):
+  return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+WATERMARK_DELAY = os.getenv("SPARK_WATERMARK_DELAY", "45 seconds")
+ENABLE_FAST_WINDOW_RULES = _flag("SPARK_ENABLE_FAST_WINDOW_RULES", "false")
+ENABLE_DISTRIBUTED_HEAVY_URL_RULE = _flag("SPARK_ENABLE_DISTRIBUTED_HEAVY_URL_RULE", "true")
 
 MAIN_WINDOW_RULES = [
   {"seconds": 5, "slide": 1, "severity": "critical", "rank": 2},
@@ -286,17 +292,18 @@ def ddos_detection_logic(df):
     window_seconds=MAIN_WINDOW_RULES[0]["seconds"],
     slide_seconds=MAIN_WINDOW_RULES[0]["slide"],
   )
-  agg_2s = _aggregate_src_ip_window(
-    df=watermarked_df,
-    window_seconds=FAST_WINDOW_RULES[0]["seconds"],
-    slide_seconds=FAST_WINDOW_RULES[0]["slide"],
-  )
+  detector_outputs = _detect_on_5s_aggregate(agg_5s)
 
-  detector_outputs = (
-    _detect_on_5s_aggregate(agg_5s)
-    + _detect_on_2s_aggregate(agg_2s)
-    + [detect_distributed_heavy_url(watermarked_df)]
-  )
+  if ENABLE_FAST_WINDOW_RULES:
+    agg_2s = _aggregate_src_ip_window(
+      df=watermarked_df,
+      window_seconds=FAST_WINDOW_RULES[0]["seconds"],
+      slide_seconds=FAST_WINDOW_RULES[0]["slide"],
+    )
+    detector_outputs += _detect_on_2s_aggregate(agg_2s)
+
+  if ENABLE_DISTRIBUTED_HEAVY_URL_RULE:
+    detector_outputs.append(detect_distributed_heavy_url(watermarked_df))
 
   merged_alerts = _union_all(detector_outputs)
 

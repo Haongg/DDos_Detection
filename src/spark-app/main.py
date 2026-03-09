@@ -1,4 +1,5 @@
 import os
+import time
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, concat_ws, to_json, struct
@@ -21,6 +22,8 @@ def consume_from_kafka(spark):
 
 
 def main():
+  progress_log_interval_seconds = int(os.getenv("SPARK_PROGRESS_LOG_INTERVAL_SECONDS", "15"))
+
   spark = SparkSession.builder \
     .appName(SparkConfig.APP_NAME) \
     .master(SparkConfig.MASTER) \
@@ -62,7 +65,26 @@ def main():
     .trigger(processingTime=SparkConfig.SETTINGS["spark.sql.streaming.trigger.processingTime"]) \
     .start()
 
-  query.awaitTermination()
+  while query.isActive:
+    query.awaitTermination(progress_log_interval_seconds)
+    progress = query.lastProgress
+    if progress:
+      duration = progress.get("durationMs", {})
+      print(
+        "[progress] batchId={batch} numInputRows={rows} "
+        "inputRowsPerSecond={in_rps} processedRowsPerSecond={out_rps} "
+        "addBatchMs={add_batch} triggerMs={trigger}".format(
+          batch=progress.get("batchId"),
+          rows=progress.get("numInputRows"),
+          in_rps=progress.get("inputRowsPerSecond"),
+          out_rps=progress.get("processedRowsPerSecond"),
+          add_batch=duration.get("addBatch"),
+          trigger=duration.get("triggerExecution"),
+        )
+      )
+    else:
+      print("[progress] Waiting for first micro-batch...")
+    time.sleep(0.2)
 
 
 if __name__ == "__main__":
