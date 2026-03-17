@@ -152,7 +152,7 @@ class TrafficFactory(TrafficResources):
         ip = random.choice(self.flood_ip)
         for _ in range(duration_sec):
             second_start = time.time()
-            for _ in range(self._scaled_randint(400, 700)):
+            for _ in range(self._scaled_randint(800, 1000)):
                 packet = self._base_packet(
                     ip,
                     random.choice(self.user_agents),
@@ -197,7 +197,7 @@ class TrafficFactory(TrafficResources):
     # --- BEHAVIOR ---
     def method_search_flood(self):
         """DDos Search Flood"""
-        attacker_ips = random.sample(self.botnet_ips, random.randint(20, 80))
+        attacker_ips = random.sample(self.botnet_ips, random.randint(10, 30))
         target_rps = self._scaled_randint(250, 600)
         duration_sec = random.randint(4, 8)
 
@@ -257,27 +257,29 @@ class TrafficFactory(TrafficResources):
     # --- VULNERABILITY ---
     def method_slowloris(self):
         """Slowloris Attack"""
-        attacker_ips = random.sample(self.botnet_ips, random.randint(30, 90))
-        target_paths = ["/", "/index.html", "/api/v1/login", "/api/v1/search"]
-        duration_sec = random.randint(30, 90)
+        # Focus traffic into fewer IPs/paths so per-IP window exceeds slowloris thresholds.
+        attacker_ips = random.sample(self.botnet_ips, random.randint(3, 8))
+        target_paths = ["/", "/api/v1/login", "/api/v1/search"]
+        duration_sec = random.randint(20, 40)
 
         for _ in range(duration_sec):
             second_start = time.time()
             for ip in attacker_ips:
-                for _ in range(self._scaled_randint(1, 3)):
+                # Generate enough per-IP volume within 5s windows.
+                for _ in range(self._scaled_randint(8, 15)):
                     packet = self._base_packet(
                         ip,
                         "Slowloris-Lib/1.1",
                         random.choice(target_paths),
                         random.choices(
-                            [200, 400, 408, 429, 503, 504],
-                            weights=[0.03, 0.15, 0.42, 0.12, 0.16, 0.12],
+                            [408, 429, 503, 504, 200],
+                            weights=[0.45, 0.20, 0.20, 0.12, 0.03],
                             k=1
                         )[0],
                         "GET"
                     )
                     packet['payload_size'] = random.randint(1, 16)
-                    packet['response_size'] = random.randint(0, 128)
+                    packet['response_size'] = random.randint(16, 96)
                     self.send(packet)
 
             elapsed = time.time() - second_start
