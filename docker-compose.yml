@@ -43,7 +43,10 @@ services:
     command: >
       bash -c "
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic network-traffic --partitions 3 --replication-factor 1 &&
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ddos-alerts --partitions 3 --replication-factor 1 --config cleanup.policy=compact
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ddos-alerts --partitions 3 --replication-factor 1 --config cleanup.policy=compact &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic connect-configs --partitions 1 --replication-factor 1 --config cleanup.policy=compact &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic connect-offsets --partitions 1 --replication-factor 1 --config cleanup.policy=compact &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic connect-status --partitions 1 --replication-factor 1 --config cleanup.policy=compact
       "
     networks:
       - ddos_net
@@ -178,6 +181,85 @@ services:
       retries: 5
     volumes:
       - es_data:/usr/share/elasticsearch/data
+
+  es-init:
+    image: python:3.11-slim
+    container_name: es-init
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - ES_SCHEME=http
+    volumes:
+      - ./src/datawarehouse:/app
+    command: ["python", "/app/setup_es.py"]
+    networks:
+      - ddos_net
+    restart: "no"
+
+  kafka-connect:
+    build:
+      context: ./src/datawarehouse/kafka-connect
+    container_name: kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      es-init:
+        condition: service_completed_successfully
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:9092"
+      CONNECT_REST_PORT: "8083"
+      CONNECT_GROUP_ID: "ddos-connect"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_INTERNAL_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+    networks:
+      - ddos_net
+    restart: unless-stopped
+
+  connect-init:
+    image: curlimages/curl:8.5.0
+    container_name: connect-init
+    depends_on:
+      kafka-connect:
+        condition: service_started
+    volumes:
+      - ./src/datawarehouse/connectors:/connectors:ro
+    command:
+      - sh
+      - -c
+      - >
+        until curl -s http://kafka-connect:8083/connectors >/dev/null; do
+          echo 'waiting for kafka-connect...'; sleep 2;
+        done;
+        curl -s -X PUT -H 'Content-Type: application/json'
+        http://kafka-connect:8083/connectors/ddos-alerts-es-sink/config
+        --data-binary @/connectors/ddos-alerts-es-sink.json
+        || exit 1;
+        echo 'connector configured';
+    networks:
+      - ddos_net
+    restart: "no"
   
   redis:
     image: redis:7-alpine

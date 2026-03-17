@@ -30,9 +30,9 @@ FAST_WINDOW_RULES = [
 ]
 
 MAIN_THRESHOLDS = {
-  "http_flood": 300,
+  "http_flood": 150,
   "botnet": 40,
-  "search_flood": 160,
+  "search_flood": 120,
   "scanning": 40,
   "slowloris": 30,
   "distributed_heavy_url": 120,
@@ -40,7 +40,7 @@ MAIN_THRESHOLDS = {
 
 # 2s thresholds are intentionally stricter than 5s to reduce false positives.
 FAST_THRESHOLDS = {
-  "http_flood": 180,
+  "http_flood": 100,
   "scanning": 28,
 }
 
@@ -269,7 +269,7 @@ def detect_distributed_heavy_url(df):
   )
 
   return long_path.select(
-    lit("__distributed__").alias("src_ip"),
+    lit(None).cast("string").alias("src_ip"),
     col("window.start").alias("window_start"),
     col("window.end").alias("window_end"),
     lit("60s").alias("window_size"),

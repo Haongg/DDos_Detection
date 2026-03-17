@@ -23,6 +23,7 @@ def consume_from_kafka(spark):
 
 def main():
   progress_log_interval_seconds = int(os.getenv("SPARK_PROGRESS_LOG_INTERVAL_SECONDS", "15"))
+  alert_stats_enabled = os.getenv("SPARK_ALERT_STATS_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 
   spark = SparkSession.builder \
     .appName(SparkConfig.APP_NAME) \
@@ -64,6 +65,28 @@ def main():
     .option("checkpointLocation",SparkConfig.SETTINGS["spark.sql.streaming.checkpointLocation"]) \
     .trigger(processingTime=SparkConfig.SETTINGS["spark.sql.streaming.trigger.processingTime"]) \
     .start()
+
+  stats_query = None
+  if alert_stats_enabled:
+    def _log_alert_stats(batch_df, batch_id):
+      if batch_df is None:
+        return
+      if batch_df.rdd.isEmpty():
+        return
+      rows = (
+        batch_df.groupBy("attack_type")
+        .count()
+        .orderBy(col("count").desc())
+        .collect()
+      )
+      summary = ", ".join([f"{row['attack_type']}={row['count']}" for row in rows])
+      print(f"[alert-stats] batchId={batch_id} {summary}")
+
+    stats_query = df.writeStream \
+      .outputMode("update") \
+      .foreachBatch(_log_alert_stats) \
+      .trigger(processingTime=SparkConfig.SETTINGS["spark.sql.streaming.trigger.processingTime"]) \
+      .start()
 
   while query.isActive:
     query.awaitTermination(progress_log_interval_seconds)
