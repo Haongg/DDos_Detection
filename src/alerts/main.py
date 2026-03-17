@@ -4,6 +4,7 @@ import time
 from confluent_kafka import Consumer
 
 from config import AlertConfig, should_notify
+from batcher import AlertBatcher
 from deduplicator import AlertDeduplicator
 from notifier import TelegramNotifier
 
@@ -91,6 +92,10 @@ def main():
         token=AlertConfig.TELEGRAM_TOKEN,
         chat_id=AlertConfig.TELEGRAM_CHAT_ID,
     )
+    batcher = AlertBatcher(
+        window_seconds=AlertConfig.ALERT_BATCH_WINDOW_SECONDS,
+        max_ips=AlertConfig.ALERT_BATCH_MAX_IPS,
+    )
 
 
     stats = {
@@ -110,6 +115,16 @@ def main():
         while True:
             msg = consumer.poll(AlertConfig.KAFKA_POLL_TIMEOUT)
             if msg is None:
+                now = time.monotonic()
+                for batch in batcher.flush_if_due(now):
+                    try:
+                        notifier.send_batch(batch)
+                        stats["sent"] += 1
+                        print(f"[info] Alert batch sent: {batch.get('attack_type')} ({len(batch.get('ip_set', []))} IPs)")
+                    except Exception as exc:
+                        stats["send_failures"] += 1
+                        print(f"[error] Failed to send alert batch: {exc}")
+
                 now = time.time()
                 if now - last_stats_at >= AlertConfig.ALERT_STATS_INTERVAL_SECONDS:
                     _log_stats(stats, last_message_at)
@@ -144,9 +159,19 @@ def main():
                 continue
 
             try:
-                notifier.send_alert(alert)
-                stats["sent"] += 1
-                print(f"[info] Alert sent: {dedupe_key}")
+                if AlertConfig.ALERT_BATCH_WINDOW_SECONDS > 0:
+                    due_batches = batcher.add(alert, time.monotonic())
+                    for batch in due_batches:
+                        notifier.send_batch(batch)
+                        stats["sent"] += 1
+                        print(
+                            f"[info] Alert batch sent: {batch.get('attack_type')} "
+                            f"({len(batch.get('ip_set', []))} IPs)"
+                        )
+                else:
+                    notifier.send_alert(alert)
+                    stats["sent"] += 1
+                    print(f"[info] Alert sent: {dedupe_key}")
                 _commit_message(consumer, msg)
             except Exception as exc:
                 stats["send_failures"] += 1
@@ -162,6 +187,14 @@ def main():
     except KeyboardInterrupt:
         print("[info] Shutting down alert service...")
     finally:
+        for batch in batcher.flush_all():
+            try:
+                notifier.send_batch(batch)
+                stats["sent"] += 1
+                print(f"[info] Alert batch sent on shutdown: {batch.get('attack_type')}")
+            except Exception as exc:
+                stats["send_failures"] += 1
+                print(f"[error] Failed to send alert batch on shutdown: {exc}")
         notifier.close()
         consumer.close()
 

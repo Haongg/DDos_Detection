@@ -34,6 +34,8 @@ class AlertConfig:
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     ALERT_MIN_SEVERITY = os.getenv("ALERT_MIN_SEVERITY", "critical").lower()
     ALERT_STATS_INTERVAL_SECONDS = int(os.getenv("ALERT_STATS_INTERVAL_SECONDS", "30"))
+    ALERT_BATCH_WINDOW_SECONDS = int(os.getenv("ALERT_BATCH_WINDOW_SECONDS", "10"))
+    ALERT_BATCH_MAX_IPS = int(os.getenv("ALERT_BATCH_MAX_IPS", "50"))
 
     CONSUMER_CONFIG = {
         "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
