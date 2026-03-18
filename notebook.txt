@@ -1,4 +1,0 @@
-
-
-mkdir -p data/checkpoints/spark-job-v2
-docker compose restart spark-app

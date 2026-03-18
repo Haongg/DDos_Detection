@@ -6,7 +6,7 @@
   "version": 1,
   "refresh": "5s",
   "time": {
-    "from": "now-15m",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {
@@ -25,24 +25,27 @@
       "type": "row",
       "title": "Traffic Overview",
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
     },
     {
       "id": 2,
       "type": "timeseries",
       "title": "Total Requests (Sum)",
       "datasource": "ddos_es",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
-          "metrics": [
-            {"id": "1", "type": "sum", "field": "request_count"}
-          ],
+          "metrics": [{ "id": "1", "type": "sum", "field": "request_count" }],
           "bucketAggs": [
-            {"id": "2", "type": "date_histogram", "field": "@timestamp", "settings": {"interval": "auto", "min_doc_count": 0}}
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": { "interval": "auto", "min_doc_count": 0 }
+            }
           ]
         }
       ],
@@ -53,7 +56,7 @@
         "overrides": []
       },
       "options": {
-        "legend": {"showLegend": true}
+        "legend": { "showLegend": true }
       }
     },
     {
@@ -61,17 +64,20 @@
       "type": "timeseries",
       "title": "Average RPS",
       "datasource": "ddos_es",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
-          "metrics": [
-            {"id": "1", "type": "avg", "field": "rps"}
-          ],
+          "metrics": [{ "id": "1", "type": "avg", "field": "rps" }],
           "bucketAggs": [
-            {"id": "2", "type": "date_histogram", "field": "@timestamp", "settings": {"interval": "auto", "min_doc_count": 0}}
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": { "interval": "auto", "min_doc_count": 0 }
+            }
           ]
         }
       ],
@@ -82,7 +88,7 @@
         "overrides": []
       },
       "options": {
-        "legend": {"showLegend": true}
+        "legend": { "showLegend": true }
       }
     },
     {
@@ -90,24 +96,27 @@
       "type": "row",
       "title": "Attack Analytics",
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9}
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
     },
     {
       "id": 5,
       "type": "barchart",
       "title": "Attack Types (Top 5)",
       "datasource": "ddos_es",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
-          "metrics": [
-            {"id": "1", "type": "count"}
-          ],
+          "metrics": [{ "id": "1", "type": "count" }],
           "bucketAggs": [
-            {"id": "2", "type": "terms", "field": "attack_type", "settings": {"size": 5, "order": "desc", "orderBy": "1"}}
+            {
+              "id": "2",
+              "type": "terms",
+              "field": "attack_type",
+              "settings": { "size": 5, "order": "desc", "orderBy": "1" }
+            }
           ]
         }
       ],
@@ -121,17 +130,20 @@
       "type": "barchart",
       "title": "Severity Distribution",
       "datasource": "ddos_es",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
-          "metrics": [
-            {"id": "1", "type": "count"}
-          ],
+          "metrics": [{ "id": "1", "type": "count" }],
           "bucketAggs": [
-            {"id": "2", "type": "terms", "field": "severity", "settings": {"size": 5, "order": "desc", "orderBy": "1"}}
+            {
+              "id": "2",
+              "type": "terms",
+              "field": "severity",
+              "settings": { "size": 5, "order": "desc", "orderBy": "1" }
+            }
           ]
         }
       ],
@@ -141,50 +153,31 @@
       }
     },
     {
-      "id": 7,
-      "type": "stat",
-      "title": "Critical Alerts (Last 15m)",
-      "datasource": "ddos_es",
-      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 18},
-      "targets": [
-        {
-          "refId": "A",
-          "timeField": "@timestamp",
-          "query": "severity:critical",
-          "metrics": [
-            {"id": "1", "type": "count"}
-          ],
-          "bucketAggs": []
-        }
-      ],
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "horizontal"
-      }
-    },
-    {
       "id": 8,
       "type": "row",
       "title": "System Health",
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 }
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "Error Ratio (Avg)",
       "datasource": "ddos_es",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
-          "metrics": [
-            {"id": "1", "type": "avg", "field": "error_ratio"}
-          ],
+          "metrics": [{ "id": "1", "type": "avg", "field": "error_ratio" }],
           "bucketAggs": [
-            {"id": "2", "type": "date_histogram", "field": "@timestamp", "settings": {"interval": "auto", "min_doc_count": 0}}
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": { "interval": "auto", "min_doc_count": 0 }
+            }
           ]
         }
       ],
@@ -195,7 +188,7 @@
         "overrides": []
       },
       "options": {
-        "legend": {"showLegend": true}
+        "legend": { "showLegend": true }
       }
     },
     {
@@ -203,22 +196,27 @@
       "type": "timeseries",
       "title": "Unique Path Count (Avg)",
       "datasource": "ddos_es",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 25},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
           "metrics": [
-            {"id": "1", "type": "avg", "field": "unique_path_count"}
+            { "id": "1", "type": "avg", "field": "unique_path_count" }
           ],
           "bucketAggs": [
-            {"id": "2", "type": "date_histogram", "field": "@timestamp", "settings": {"interval": "auto", "min_doc_count": 0}}
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": { "interval": "auto", "min_doc_count": 0 }
+            }
           ]
         }
       ],
       "options": {
-        "legend": {"showLegend": true}
+        "legend": { "showLegend": true }
       }
     },
     {
@@ -226,21 +224,21 @@
       "type": "row",
       "title": "Live Events",
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 33}
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 }
     },
     {
       "id": 12,
       "type": "table",
       "title": "Recent Alerts",
       "datasource": "ddos_es",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 34},
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
       "targets": [
         {
           "refId": "A",
           "timeField": "@timestamp",
           "query": "*",
           "metrics": [
-            {"id": "1", "type": "raw_document", "settings": {"size": 50}}
+            { "id": "1", "type": "raw_document", "settings": { "size": 50 } }
           ],
           "bucketAggs": []
         }
