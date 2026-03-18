@@ -6,20 +6,11 @@ ES_SCHEME = os.getenv("ES_SCHEME", "http")
 
 ILM_POLICY_NAME = "ddos-alerts-delete-after-1d"
 INDEX_TEMPLATE_NAME = "ddos-alerts-template"
-WRITE_ALIAS = "ddos-alerts"
 INDEX_PATTERN = "ddos-alerts-*"
 
 ILM_POLICY = {
   "policy": {
     "phases": {
-      "hot": {
-        "actions": {
-          "rollover": {
-            "max_age": "1d",
-            "max_size": "1gb"
-          }
-        }
-      },
       "delete": {
         "min_age": "1d",
         "actions": {
@@ -35,7 +26,6 @@ INDEX_TEMPLATE = {
   "template": {
     "settings": {
       "index.lifecycle.name": ILM_POLICY_NAME,
-      "index.lifecycle.rollover_alias": WRITE_ALIAS,
       "number_of_shards": 1,
       "number_of_replicas": 0,
       "refresh_interval": "5s"

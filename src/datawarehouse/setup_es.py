@@ -9,7 +9,6 @@ from schema import (
   ILM_POLICY_NAME,
   INDEX_TEMPLATE,
   INDEX_TEMPLATE_NAME,
-  WRITE_ALIAS,
 )
 
 
@@ -51,15 +50,6 @@ def main():
 
   status, body = _request("PUT", f"/_index_template/{INDEX_TEMPLATE_NAME}", INDEX_TEMPLATE, allow_statuses=[200])
   print(f"[es-init] index template status={status} body={body}")
-
-  # Create initial rollover index if missing
-  status, body = _request(
-    "PUT",
-    f"/{WRITE_ALIAS}-000001",
-    {"aliases": {WRITE_ALIAS: {"is_write_index": True}}},
-    allow_statuses=[200, 400, 409],
-  )
-  print(f"[es-init] initial index status={status} body={body}")
 
 
 if __name__ == "__main__":
