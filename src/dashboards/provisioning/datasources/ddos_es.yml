@@ -1,0 +1,20 @@
+apiVersion: 1
+
+deleteDatasources:
+  - name: ddos_es
+
+datasources:
+  - name: ddos_es
+    uid: ddos_es
+    type: elasticsearch
+    access: proxy
+    url: http://elasticsearch:9200
+    isDefault: true
+    editable: true
+    version: 2
+    jsonData:
+      index: "[ddos-alerts-]YYYY.MM.DD"
+      timeField: "@timestamp"
+      esVersion: 7.17.9
+      interval: Daily
+      timeInterval: "5s"

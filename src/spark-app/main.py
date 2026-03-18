@@ -10,6 +10,31 @@ from config.detection_conf import SparkConfig
 from jobs.ddos_detector import ddos_detection_logic
 
 
+def _normalize_checkpoint_path(path_value):
+  path = (path_value or "").strip()
+  if not path:
+    return ""
+  # Accept inputs like "data/spark-job-v2" by normalizing to absolute in-container path.
+  if not path.startswith("/"):
+    path = f"/{path}"
+  return path
+
+
+def _resolve_checkpoint_paths():
+  base_checkpoint = _normalize_checkpoint_path(
+    os.getenv("SPARK_CHECKPOINT_DIR", SparkConfig.SETTINGS.get("spark.sql.streaming.checkpointLocation", ""))
+  ) or "/data/checkpoints/spark-job-v2"
+  stats_checkpoint = _normalize_checkpoint_path(
+    os.getenv("SPARK_STATS_CHECKPOINT_DIR", f"{base_checkpoint}-stats")
+  )
+
+  os.makedirs(base_checkpoint, exist_ok=True)
+  os.makedirs(stats_checkpoint, exist_ok=True)
+  print(f"[info] checkpoint_dir={base_checkpoint}")
+  print(f"[info] stats_checkpoint_dir={stats_checkpoint}")
+  return base_checkpoint, stats_checkpoint
+
+
 def consume_from_kafka(spark):
   return spark.readStream \
     .format("kafka") \
@@ -24,6 +49,7 @@ def consume_from_kafka(spark):
 def main():
   progress_log_interval_seconds = int(os.getenv("SPARK_PROGRESS_LOG_INTERVAL_SECONDS", "15"))
   alert_stats_enabled = os.getenv("SPARK_ALERT_STATS_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+  checkpoint_dir, stats_checkpoint_dir = _resolve_checkpoint_paths()
 
   spark = SparkSession.builder \
     .appName(SparkConfig.APP_NAME) \
@@ -62,7 +88,7 @@ def main():
     .format("kafka") \
     .option("kafka.bootstrap.servers", SparkConfig.KAFKA_BOOTSTRAP_SERVERS) \
     .option("topic", SparkConfig.OUTPUT_TOPIC) \
-    .option("checkpointLocation",SparkConfig.SETTINGS["spark.sql.streaming.checkpointLocation"]) \
+    .option("checkpointLocation", checkpoint_dir) \
     .trigger(processingTime=SparkConfig.SETTINGS["spark.sql.streaming.trigger.processingTime"]) \
     .start()
 
@@ -85,6 +111,7 @@ def main():
     stats_query = df.writeStream \
       .outputMode("update") \
       .foreachBatch(_log_alert_stats) \
+      .option("checkpointLocation", stats_checkpoint_dir) \
       .trigger(processingTime=SparkConfig.SETTINGS["spark.sql.streaming.trigger.processingTime"]) \
       .start()
 
