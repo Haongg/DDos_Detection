@@ -11,21 +11,7 @@ Project mô phỏng traffic web thời gian thực, phát hiện hành vi DDoS b
 
 ## 2. Kiến trúc tổng quan
 
-```text
-Producer (simulator)
-	-> Kafka topic: network-traffic
-Spark Streaming (detector)
-	-> Kafka topic: ddos-alerts
-Kafka Connect (ES sink)
-	-> Elasticsearch (ddos-alerts-YYYY.MM.DD)
-Grafana
-	-> Query Elasticsearch datasource (ddos_es)
-
-Alert Service
-	<- Kafka topic: ddos-alerts
-	-> Redis (dedup)
-	-> Telegram notification
-```
+![System Architecture](images/architecture-design.png)
 
 Thành phần chính:
 
