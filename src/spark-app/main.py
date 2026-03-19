@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, concat_ws, to_json, struct
@@ -20,16 +21,38 @@ def _normalize_checkpoint_path(path_value):
   return path
 
 
+def _resolve_checkpoint_run_id():
+  configured_run_id = os.getenv("SPARK_CHECKPOINT_RUN_ID", "").strip()
+  if configured_run_id:
+    return configured_run_id
+  return datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+
+
+def _materialize_checkpoint_path(path_value, run_id):
+  path = _normalize_checkpoint_path(path_value)
+  if not path:
+    return ""
+  if "*" in path:
+    return path.replace("*", run_id)
+  return path
+
+
 def _resolve_checkpoint_paths():
-  base_checkpoint = _normalize_checkpoint_path(
+  run_id = _resolve_checkpoint_run_id()
+  base_checkpoint_template = _normalize_checkpoint_path(
     os.getenv("SPARK_CHECKPOINT_DIR", SparkConfig.SETTINGS.get("spark.sql.streaming.checkpointLocation", ""))
-  ) or "/data/checkpoints/spark-job-v2"
-  stats_checkpoint = _normalize_checkpoint_path(
-    os.getenv("SPARK_STATS_CHECKPOINT_DIR", f"{base_checkpoint}-stats")
-  )
+  ) or "/data/checkpoints/spark-job-v2-*"
+  base_checkpoint = _materialize_checkpoint_path(base_checkpoint_template, run_id)
+
+  stats_checkpoint_template = os.getenv("SPARK_STATS_CHECKPOINT_DIR", "").strip()
+  if stats_checkpoint_template:
+    stats_checkpoint = _materialize_checkpoint_path(stats_checkpoint_template, run_id)
+  else:
+    stats_checkpoint = f"{base_checkpoint}-stats"
 
   os.makedirs(base_checkpoint, exist_ok=True)
   os.makedirs(stats_checkpoint, exist_ok=True)
+  print(f"[info] checkpoint_run_id={run_id}")
   print(f"[info] checkpoint_dir={base_checkpoint}")
   print(f"[info] stats_checkpoint_dir={stats_checkpoint}")
   return base_checkpoint, stats_checkpoint
